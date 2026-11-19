@@ -7,7 +7,13 @@ import type { ChatProvider, EmbedKind, EmbeddingProvider } from "./types";
 
 type ModelRef = `${string}/${string}` | `${string}/${string}:${string}`;
 
-const client = () => new Replicate({ auth: requireEnv("REPLICATE_API_TOKEN") });
+/** A Replicate client for `token` (a visitor's own key) or, if omitted, the server's REPLICATE_API_TOKEN. */
+const client = (token?: string) => new Replicate({ auth: token ?? requireEnv("REPLICATE_API_TOKEN") });
+
+export interface ReplicateOptions {
+  /** Per-request API token. Omit to use the server's REPLICATE_API_TOKEN. */
+  token?: string;
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -42,7 +48,7 @@ async function runWithThrottleRetry<T>(fn: () => Promise<T>, maxWaitMs: number):
 // The web request has a 60 s limit (3 calls per question), so wait less there than in the ingest.
 const maxWaitMs = () => Number(env("REPLICATE_MAX_THROTTLE_WAIT_MS", "15000")) || 15000;
 
-export function replicateChat(): ChatProvider {
+export function replicateChat({ token }: ReplicateOptions = {}): ChatProvider {
   const model = env("REPLICATE_CHAT_MODEL", "meta/meta-llama-3-70b-instruct") as ModelRef;
   return {
     name: `replicate:${model}`,
@@ -52,7 +58,7 @@ export function replicateChat(): ChatProvider {
       const fullPrompt = jsonSchema
         ? `${prompt}\n\nRespond with ONLY a JSON object matching this JSON Schema, no prose:\n${JSON.stringify(jsonSchema)}`
         : prompt;
-      const output = await runWithThrottleRetry(() => client().run(model, {
+      const output = await runWithThrottleRetry(() => client(token).run(model, {
         input: isLlama3(model)
           ? {
               // Replicate's Llama 3 models have no system_prompt input (it would be
@@ -78,7 +84,7 @@ export function replicateChat(): ChatProvider {
   };
 }
 
-export function replicateEmbeddings(): EmbeddingProvider {
+export function replicateEmbeddings({ token }: ReplicateOptions = {}): EmbeddingProvider {
   const model = requireEnv("REPLICATE_EMBED_MODEL") as ModelRef;
   return {
     name: `replicate:${model}`,
@@ -86,7 +92,7 @@ export function replicateEmbeddings(): EmbeddingProvider {
       // Common input shape for bge/e5 embedding models on Replicate: a JSON-encoded
       // list of strings. Check your model's page and adjust if its inputs differ.
       const output = await runWithThrottleRetry(
-        () => client().run(model, { input: { texts: JSON.stringify(withE5Prefix(model, texts, kind)) } }),
+        () => client(token).run(model, { input: { texts: JSON.stringify(withE5Prefix(model, texts, kind)) } }),
         maxWaitMs(),
       );
       return normaliseEmbeddingOutput(output);

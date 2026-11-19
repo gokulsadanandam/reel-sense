@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { posterUrl } from "@/lib/movies";
+import { AccessPicker, MODE_LABEL, accessHeaders, isReady, useAccess, type AccessMode } from "./access-panel";
 
 interface Movie {
   id: number;
@@ -19,9 +20,16 @@ interface Turn {
   question: string;
   answer?: string;
   movies?: Movie[];
-  route?: "vector" | "sql";
+  route?: "vector" | "keyword" | "sql";
+  mode?: AccessMode;
   error?: string;
 }
+
+const ROUTE_LABEL = {
+  vector: "Hybrid search (filters + meaning)",
+  keyword: "Keyword search (filters + words)",
+  sql: "SQL search (filters only)",
+} as const;
 
 const EXAMPLES = [
   "Something like Inception but from the 90s, under 2 hours",
@@ -34,6 +42,9 @@ export default function Home() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const access = useAccess();
+  // The provider picker in the chat bar; opens by itself when a question needs a token or code.
+  const [pickerOpen, setPickerOpen] = useState(false);
   const nextId = useRef(0);
   const endRef = useRef<HTMLDivElement>(null);
   const turnRefs = useRef(new Map<number, HTMLElement>());
@@ -66,6 +77,11 @@ export default function Home() {
 
   async function ask(question: string) {
     if (!question.trim() || loading) return;
+    // No token / code yet for the chosen provider: open the picker instead of sending.
+    if (!isReady(access.settings)) {
+      setPickerOpen(true);
+      return;
+    }
     setInput("");
     setLoading(true);
 
@@ -83,11 +99,12 @@ export default function Home() {
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...accessHeaders(access.settings) },
         body: JSON.stringify({ question, history }),
       });
       const data = await res.json();
       updateTurn(id, res.ok ? data : { error: data.error ?? "Request failed" });
+      if (!res.ok && data.needsAccess) setPickerOpen(true);
     } catch {
       updateTurn(id, { error: "Network error" });
     } finally {
@@ -125,6 +142,7 @@ export default function Home() {
       <h1>ReelSense</h1>
       <p className="subtitle">Ask for movies in plain English. Answers come only from the database.</p>
 
+
       {turns.length === 0 && (
         <div className="examples">
           {EXAMPLES.map((q) => (
@@ -150,8 +168,8 @@ export default function Home() {
           {turn.answer && <div className="answer">{linkTitles(turn.answer)}</div>}
           {turn.route && (
             <p className="meta">
-              {turn.route === "vector" ? "Hybrid search (filters + meaning)" : "SQL search (facts only)"} ·{" "}
-              {turn.movies?.length ?? 0} sources
+              {ROUTE_LABEL[turn.route]} ·{" "}
+              {turn.movies?.length ?? 0} sources{turn.mode ? ` · via ${MODE_LABEL[turn.mode]}` : ""}
             </p>
           )}
           {turn.movies && turn.movies.length > 0 && (
@@ -167,6 +185,7 @@ export default function Home() {
 
       <form className="ask" onSubmit={onSubmit}>
         <div className="row">
+          <AccessPicker {...access} open={pickerOpen} setOpen={setPickerOpen} />
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}

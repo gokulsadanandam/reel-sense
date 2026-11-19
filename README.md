@@ -46,6 +46,7 @@ Supabase: movies.embedding (HNSW index)              3. GENERATE (LLM)
 | **The LLM plans the search before answering** | Turns free text into structured filters. Fact questions ("top rated Nolan films") skip embeddings entirely and use plain SQL, which is faster, cheaper and exact. |
 | **Answers come only from retrieved movies** | The prompt forbids mentioning movies not in the results, so every recommendation is a real row you can show a card for. |
 | **Swappable AI providers** | One interface (`src/lib/ai`), chosen by env var. Develop free on Ollama, demo on Claude + Voyage, switch with no code changes. No vendor lock-in. |
+| **Visitors choose who pays** | The live site offers a free tier (Groq's free account with no card, which hits limits instead of bills), the visitor's own Replicate token (per request, never stored), or an owner access code. The owner's paid token is never used without the code. No free host serves the e5 embedding model, so the free tier searches with Postgres full-text (same filters, ranked by relevance x popularity) instead of vectors. |
 | **"More like this" uses no LLM** | It's nearest neighbours of a movie's own embedding: instant and free. |
 | **Plan output is validated** (`zod`) with a safe fallback | Small models sometimes return bad JSON; the app falls back to a plain semantic search instead of erroring. |
 

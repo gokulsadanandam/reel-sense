@@ -1,4 +1,4 @@
-import { embed, getChat, getEmbeddings } from "./ai";
+import { embed, getChat, getEmbeddings, type ChatProvider, type EmbeddingProvider } from "./ai";
 import { MOVIE_COLUMNS, readClient, type MovieHit } from "./db";
 import { SEARCH_PLAN_JSON_SCHEMA, parsePlan, planSystem, type SearchPlan } from "./plan";
 
@@ -11,10 +11,24 @@ export interface AskResult {
   answer: string;
   movies: MovieHit[];
   plan: SearchPlan;
-  route: "vector" | "sql";
+  route: Route;
 }
 
+/** vector: filters + meaning · keyword: filters + full-text (no embedding model) · sql: filters only */
+export type Route = "vector" | "keyword" | "sql";
+
 const MATCH_COUNT = 8;
+
+/** Which models answer this request. Defaults to the AI_PROVIDER / EMBED_PROVIDER env settings. */
+export interface AskProviders {
+  chat: ChatProvider;
+  /** null = no embedding model available (the free tier): topics use keyword search instead. */
+  embeddings: EmbeddingProvider | null;
+  /** Model for the planning step, if different from `chat` (spreads per-model rate limits). */
+  planner?: ChatProvider;
+  /** Send shorter movie descriptions to the answer step (for tight token budgets). */
+  compactSources?: boolean;
+}
 
 /**
  * The full RAG loop:
@@ -22,11 +36,15 @@ const MATCH_COUNT = 8;
  *   2. retrieve: hybrid search (filters, then vector similarity) or plain SQL
  *   3. generate: LLM answers using ONLY the retrieved movies
  */
-export async function ask(question: string, history: Turn[] = []): Promise<AskResult> {
-  const chat = getChat();
+export async function ask(
+  question: string,
+  history: Turn[] = [],
+  providers: AskProviders = { chat: getChat(), embeddings: getEmbeddings() },
+): Promise<AskResult> {
+  const { chat } = providers;
 
   // 1. Plan
-  const planOutput = await chat.complete({
+  const planOutput = await (providers.planner ?? chat).complete({
     system: planSystem(),
     prompt: `${formatHistory(history)}Question: ${question}`,
     jsonSchema: SEARCH_PLAN_JSON_SCHEMA,
@@ -35,8 +53,20 @@ export async function ask(question: string, history: Turn[] = []): Promise<AskRe
   const plan = parsePlan(planOutput, question);
 
   // 2. Retrieve
-  const route = plan.topic ? "vector" : "sql";
-  const movies = route === "vector" ? await vectorSearch(plan) : await sqlSearch(plan);
+  let route: Route = !plan.topic ? "sql" : providers.embeddings ? "vector" : "keyword";
+  let movies =
+    route === "vector"
+      ? await vectorSearch(plan, providers.embeddings ?? undefined)
+      : route === "keyword"
+        ? await keywordSearch(plan)
+        : await sqlSearch(plan);
+
+  // Keywords can miss when the words don't appear in any plot ("something fun"):
+  // fall back to the filters alone so the user still gets matching films.
+  if (route === "keyword" && movies.length === 0) {
+    route = "sql";
+    movies = await sqlSearch(plan);
+  }
 
   if (movies.length === 0) {
     return {
@@ -52,16 +82,62 @@ export async function ask(question: string, history: Turn[] = []): Promise<AskRe
     system: ANSWER_SYSTEM,
     prompt:
       `${formatHistory(history)}Search filters applied: ${describeFilters(plan) || "none"}\n\n` +
-      `Top search results (${movies.length} movies):\n\n${formatSources(movies)}\n\nQuestion: ${question}`,
+      `Top search results (${movies.length} movies):\n\n${formatSources(movies, { compact: providers.compactSources })}\n\nQuestion: ${question}`,
     maxTokens: 2048,
   });
 
   return { answer: answer.trim(), movies, plan, route };
 }
 
+/**
+ * Minimum votes for a rating-sorted list, mirroring the ingest thresholds: regional
+ * cinema and a director's full filmography have fewer votes, as do recent releases.
+ */
+export function minVotesForRating(plan: SearchPlan, today: Date = new Date()): number {
+  if (plan.language || plan.director) return 20;
+  if (plan.min_year !== null && plan.min_year >= today.getUTCFullYear() - 2) return 50;
+  return 200;
+}
+
+/** Words that appear in nearly every plot or question and only slow keyword search down. */
+const GENERIC_WORDS = new Set([
+  "movie", "movies", "film", "films", "story", "stories", "about", "something", "like", "similar",
+  "kind", "type", "good", "great", "best", "show", "watch", "recommend", "recommendation",
+]);
+
+/** The topic minus generic words; falls back to the full topic if nothing distinctive is left. */
+export function keywordQuery(topic: string): string {
+  // Split on hyphens too: Postgres would turn "feel-good" into "feel" + "good" anyway.
+  const words = topic
+    .split(/[\s\-‐-―]+/)
+    .filter((w) => w && !GENERIC_WORDS.has(w.toLowerCase().replace(/[^a-z]/g, "")));
+  return words.length > 0 ? words.join(" ") : topic;
+}
+
+/** Free-tier search without an embedding model: SQL filters + Postgres full-text relevance. */
+export async function keywordSearch(plan: SearchPlan): Promise<MovieHit[]> {
+  const { data, error } = await readClient().rpc("keyword_movies", {
+    p_query: keywordQuery(plan.topic),
+    p_match_count: MATCH_COUNT,
+    p_min_year: plan.min_year,
+    p_max_year: plan.max_year,
+    p_max_runtime: plan.max_runtime,
+    p_min_rating: plan.min_rating,
+    p_genre: plan.genre,
+    p_director: plan.director,
+    p_language: plan.language,
+  });
+  if (error) {
+    // A very broad query can still be slow; return nothing so ask() falls back to filters-only SQL.
+    if (/timeout/i.test(error.message)) return [];
+    throw new Error(`keyword_movies failed: ${error.message}`);
+  }
+  return (data ?? []) as MovieHit[];
+}
+
 /** Hybrid search: SQL filters narrow the set, then rank by meaning. */
-export async function vectorSearch(plan: SearchPlan): Promise<MovieHit[]> {
-  const [queryEmbedding] = await embed(getEmbeddings(), [plan.topic], "query");
+export async function vectorSearch(plan: SearchPlan, embeddings: EmbeddingProvider = getEmbeddings()): Promise<MovieHit[]> {
+  const [queryEmbedding] = await embed(embeddings, [plan.topic], "query");
   const { data, error } = await readClient().rpc("match_movies", {
     p_query_embedding: JSON.stringify(queryEmbedding),
     p_match_count: MATCH_COUNT,
@@ -87,6 +163,8 @@ export async function sqlSearch(plan: SearchPlan): Promise<MovieHit[]> {
   if (plan.genre) query = query.contains("genres", [plan.genre]);
   if (plan.director) query = query.ilike("director", `%${plan.director}%`);
   if (plan.language) query = query.eq("original_language", plan.language);
+  // A 10/10 from five voters isn't "top rated": rank only films with enough votes.
+  if (plan.sort !== "newest") query = query.gte("vote_count", minVotesForRating(plan));
 
   query =
     plan.sort === "newest"
@@ -124,7 +202,15 @@ Rules:
 - If none of the listed movies really fit, say so honestly instead of stretching.
 - Keep it concise.`;
 
-export function formatSources(movies: MovieHit[]): string {
+const COMPACT_PLOT_CHARS = 350;
+const COMPACT_DOC_LINES = /^(Title|Genres|Directed by|Starring):/;
+
+/**
+ * The retrieved movies as text for the answer prompt. `compact` keeps only the
+ * title/genres/people lines and a trimmed plot (~5x fewer tokens than the full doc
+ * with keywords and review snippets), for providers with tight token budgets.
+ */
+export function formatSources(movies: MovieHit[], { compact = false }: { compact?: boolean } = {}): string {
   return movies
     .map((m, i) => {
       const facts = [
@@ -133,9 +219,17 @@ export function formatSources(movies: MovieHit[]): string {
       ]
         .filter(Boolean)
         .join(", ");
-      return `[${i + 1}] ${facts ? `(${facts})\n` : ""}${m.doc}`;
+      const body = compact ? compactDoc(m) : m.doc;
+      return `[${i + 1}] ${facts ? `(${facts})\n` : ""}${body}`;
     })
     .join("\n\n---\n\n");
+}
+
+function compactDoc(m: MovieHit): string {
+  const lines = m.doc.split("\n").filter((l) => COMPACT_DOC_LINES.test(l));
+  const plot = (m.overview ?? "").trim();
+  if (plot) lines.push(`Plot: ${plot.length > COMPACT_PLOT_CHARS ? `${plot.slice(0, COMPACT_PLOT_CHARS).trimEnd()}…` : plot}`);
+  return lines.join("\n");
 }
 
 /** Human-readable summary of a plan's hard filters, e.g. "language ta, 2026, genre Action". */

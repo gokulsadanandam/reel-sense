@@ -143,13 +143,29 @@ git push -u origin main
    |---|---|
    | `SUPABASE_URL` | `https://abcd1234.supabase.co` |
    | `SUPABASE_ANON_KEY` | the publishable/anon key |
-   | `AI_PROVIDER` | `replicate` |
-   | `EMBED_PROVIDER` | `replicate` |
-   | `REPLICATE_API_TOKEN` | `r8_...` |
    | `REPLICATE_CHAT_MODEL` | `meta/meta-llama-3-70b-instruct` |
    | `REPLICATE_EMBED_MODEL` | `beautyyuyanli/multilingual-e5-large:a06276a89f1a902d5fc225a9ca32b6e8e6292b7f3b136518878da97c458e2bad` (**same** as used for ingest) |
+   | `GROQ_API_KEY` | free-tier key (optional, enables the Free tier) |
+   | `REPLICATE_API_TOKEN` + `OWNER_ACCESS_CODE` | optional, enables the Access code mode for you |
 
    **Do not add** `SUPABASE_SERVICE_ROLE_KEY` or `TMDB_READ_TOKEN`; the live site doesn't need them.
+
+   ### Who pays for questions
+   Visitors pick a mode in the "Answers powered by" box:
+
+   | Mode | Needs on Vercel | Who pays |
+   |---|---|---|
+   | **Free tier** | `GROQ_API_KEY` | nobody: a free Groq account **without a card** stops at its limits instead of billing. Uses keyword search instead of vectors (no free host serves the e5 embedding model) |
+   | **My Replicate token** | nothing | the visitor; their token stays in their browser and is sent per request, never stored or logged |
+   | **Access code** | `REPLICATE_API_TOKEN` + `OWNER_ACCESS_CODE` (12+ chars) | you; open the site at `/#owner` to see this option |
+
+   Your Replicate token is never used without the access code. Leave both unset if you don't
+   want that mode at all. "More like this" uses no AI model, so it always works for free.
+
+   **Free-tier key:** Groq at console.groq.com/keys; don't add a payment method. The default model
+   is `openai/gpt-oss-120b` (check console.groq.com/docs/models; Groq retires models). Free limits
+   are shared by all visitors, so on a busy day free questions may fail with "free tier is busy".
+   The free tier also needs the `keyword_movies` migration (`20261119000100_keyword_search.sql`).
 
 3. **Deploy.** Optional: Project → Settings → Functions → Region, set it to the region nearest
    your Supabase project (e.g. Mumbai `bom1`) to cut database round-trips.
