@@ -1,5 +1,7 @@
 # ReelSense
 
+**▶ Live demo: [reel-sense-beta.vercel.app](https://reel-sense-beta.vercel.app/)** (free tier, no sign-up)
+
 **Movie search that understands what you mean.** Ask for movies in plain English, e.g. *"something like Inception but from the 90s, under 2 hours"*,
 and get recommendations drawn **only** from your own movie database, with posters and a
 "More like this" button.
@@ -108,3 +110,10 @@ npm run check     # typecheck + tests
 - Add a reranking step (e.g. Voyage rerank) between retrieval and generation
 - Store "where to watch" data and filter on it
 - Deploy: Supabase cloud + Vercel (move the ingest to a scheduled job)
+
+## Data attribution
+
+<a href="https://www.themoviedb.org/"><img src="public/tmdb-logo.svg" alt="TMDB" height="14"></a>
+
+Movie data and posters come from [The Movie Database (TMDB)](https://www.themoviedb.org/).
+This product uses the TMDB API but is not endorsed or certified by TMDB.

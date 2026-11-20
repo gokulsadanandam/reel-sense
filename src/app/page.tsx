@@ -183,6 +183,15 @@ export default function Home() {
       ))}
       <div ref={endRef} className="scroll-end" aria-hidden="true" />
 
+      {/* Required by TMDB's API terms: logo + notice on any public app using their data. */}
+      <footer className="attribution">
+        <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer" aria-label="The Movie Database (TMDB)">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/tmdb-logo.svg" alt="TMDB logo" width={120} height={16} />
+        </a>
+        <p>Movie data and posters from TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      </footer>
+
       <form className="ask" onSubmit={onSubmit}>
         <div className="row">
           <AccessPicker {...access} open={pickerOpen} setOpen={setPickerOpen} />

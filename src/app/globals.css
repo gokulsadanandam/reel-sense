@@ -147,3 +147,12 @@ form.ask .access-field button {
 @media (max-width: 560px) {
   .picker-label { display: none; }
 }
+
+/* TMDB attribution (required by their API terms) */
+.attribution {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 0.78rem;
+}
+.attribution p { margin: 0; flex: 1; min-width: 220px; }
+.attribution img { display: block; height: 14px; width: auto; }
